@@ -28,12 +28,13 @@ jobs:
       run: |
         pwd
         ls -al
-        cat ./config.env  # 确认存在
+        cat ./config.env
+
     - name: 工作配置
       shell: bash
       working-directory: ${{ github.workspace }}
       run: |
-        cat ./config.env  # 确认存在
+        cat ./config.env
         echo "LXC_DOCKER=$(cat config.env | grep -w "LXC_DOCKER" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
         echo "METHOD_OK=$(cat config.env | grep -w "METHOD_OK" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
         echo "ENABLE_KVM=$(cat config.env | grep -w "ENABLE_KVM" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
@@ -67,6 +68,10 @@ jobs:
         echo "BUILD_BOOT_IMG=$(cat config.env | grep -w "BUILD_BOOT_IMG" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
         echo "SOURCE_BOOT_IMAGE=$(cat config.env | grep -w "SOURCE_BOOT_IMAGE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
 
+        # ========== 🆕 读取 SukiSU 配置（新增） ==========
+        echo "ENABLE_SUKISU=$(cat config.env | grep -w "ENABLE_SUKISU" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
+        echo "SUKISU_VERSION=$(cat config.env | grep -w "SUKISU_VERSION" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
+        echo "SUKISU_SOURCE=$(cat config.env | grep -w "SUKISU_SOURCE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
 
     - name: 大容量空间支持
       uses: easimon/maximize-build-space@master
@@ -78,7 +83,6 @@ jobs:
           remove-haskell: 'true'
           remove-codeql: 'true'
 
-          
     - uses: actions/checkout@v3
       with:
           path: KernelSU
@@ -148,9 +152,7 @@ jobs:
         cd $GITHUB_WORKSPACE/kernel_workspace
         git clone https://android.googlesource.com/platform/system/tools/mkbootimg tools -b master-kernel-build-2022 --depth=1
 
-
     - name: 下载直链内核镜像
-
       if: env.BUILD_BOOT_IMG == 'true'
       run: |
        cd $GITHUB_WORKSPACE/kernel_workspace
@@ -158,7 +160,7 @@ jobs:
        if [ -f boot-source.img ]; then
            echo "FORMAT_MKBOOTING=$(echo `tools/unpack_bootimg.py --boot_img=boot-source.img --format mkbootimg`)" >> $GITHUB_ENV
            echo "HAVE_SOURCE_BOOT_IMAGE=true" >> $GITHUB_ENV
-           fi
+       fi
         
     - name: 下载内核源码
       run: |
@@ -166,7 +168,65 @@ jobs:
         echo ${{ env.KERNEL_SOURCE }} 
         echo ${{ env.KERNEL_SOURCE_BRANCH }}
         git clone ${{ env.KERNEL_SOURCE }} -b ${{ env.KERNEL_SOURCE_BRANCH }} android-kernel --depth=1
-      
+
+    # ============================================================
+    # 🆕 自动探测正确的 defconfig（新增步骤）
+    # ============================================================
+    - name: 自动探测 defconfig
+      run: |
+        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+        echo "=========================================="
+        echo "📂 列出所有可用的 defconfig 文件"
+        echo "=========================================="
+        find . -name "*defconfig" 2>/dev/null | grep -v "/\.git" | sort || echo "未找到任何 defconfig"
+        
+        echo ""
+        echo "=========================================="
+        echo "🔍 尝试自动匹配正确的 defconfig"
+        echo "=========================================="
+        
+        # 候选列表（按优先级排序）
+        CANDIDATES=(
+          "blossom_defconfig"
+          "blossom-perf_defconfig"
+          "blossom-qgki_defconfig"
+          "crdroid_blossom_defconfig"
+          "mt6765_defconfig"
+          "mt6765-perf_defconfig"
+          "mt6765-user_defconfig"
+          "blossom-user_defconfig"
+          "defconfig"
+        )
+        
+        FOUND_CONFIG=""
+        for cfg in "${CANDIDATES[@]}"; do
+          if [ -f "arch/arm64/configs/$cfg" ]; then
+            echo "✅ 找到: arch/arm64/configs/$cfg"
+            FOUND_CONFIG="$cfg"
+            break
+          elif [ -f "arch/arm/configs/$cfg" ]; then
+            echo "✅ 找到: arch/arm/configs/$cfg"
+            FOUND_CONFIG="$cfg"
+            break
+          fi
+        done
+        
+        if [ -n "$FOUND_CONFIG" ]; then
+          echo "KERNEL_CONFIG=$FOUND_CONFIG" >> $GITHUB_ENV
+          echo "📌 使用 defconfig: $FOUND_CONFIG"
+        else
+          # 如果都没找到，尝试使用第一个找到的 defconfig
+          FIRST_DEF=$(find . -name "*defconfig" 2>/dev/null | grep -v "/\.git" | head -1 | xargs basename 2>/dev/null || echo "")
+          if [ -n "$FIRST_DEF" ]; then
+            echo "⚠️ 未匹配到候选，使用第一个找到的: $FIRST_DEF"
+            echo "KERNEL_CONFIG=$FIRST_DEF" >> $GITHUB_ENV
+          else
+            echo "❌ 未找到任何 defconfig，请检查内核源码是否完整"
+            exit 1
+          fi
+        fi
+        echo "=========================================="
+
     - name: 开启KVM配置
       if: env.ENABLE_KVM == 'true'
       run: |
@@ -176,7 +236,6 @@ jobs:
          echo "CONFIG_VHOST_NET=y" >> android-kernel/arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
          echo "CONFIG_VHOST_CROSS_ENDIAN_LEGACY=y" >> android-kernel/arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
          
-         
     - name: 开启lxc和docker配置
       if: env.LXC_DOCKER == 'true'
       run: |
@@ -185,7 +244,6 @@ jobs:
         chmod 777 LXC-DOCKER-OPEN-CONFIG.sh
         ./LXC-DOCKER-OPEN-CONFIG.sh android-kernel/arch/arm64/configs/${{ env.KERNEL_CONFIG }} -w
 
-      
     - name: 打入lxc补丁
       if: env.LXC_PATCH == 'true'
       run: |
@@ -211,26 +269,47 @@ jobs:
         cd $GITHUB_WORKSPACE/kernel_workspace
         sed -i '/CONFIG_ANDROID_PARANOID_NETWORK/d' android-kernel/arch/arm64/configs/${{ env.KERNEL_CONFIG }}
         echo "# CONFIG_ANDROID_PARANOID_NETWORK is not set" >> android-kernel/arch/arm64/configs/${{ env.KERNEL_CONFIG }}
+
+    # ============================================================
+    # 🆕 替换为 SukiSU-Ultra（原 KernelSU 已移除）
+    # ============================================================
+    - name: 集成 SukiSU-Ultra
+      if: env.ENABLE_SUKISU == 'true'
+      run: |
+        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+        echo "=========================================="
+        echo "🔄 正在集成 SukiSU-Ultra..."
+        echo "📦 源码: ${{ env.SUKISU_SOURCE }}"
+        echo "🏷️  版本: ${{ env.SUKISU_VERSION }}"
+        echo "=========================================="
         
+        # 清理可能存在的旧 KSU 目录
+        rm -rf KernelSU
         
-  
-    - name: 开启KSU
-      if: env.ENABLE_KERNELSU == 'true'
+        # 从 SukiSU 官方仓库集成
+        curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s ${{ env.SUKISU_VERSION }}
+        
+        if [ $? -eq 0 ]; then
+          echo "✅ SukiSU-Ultra 集成成功！"
+          echo "UPLOADNAME=-SukiSU" >> $GITHUB_ENV
+        else
+          echo "❌ SukiSU-Ultra 集成失败！"
+          exit 1
+        fi
+
+    # 如果 ENABLE_KERNELSU 仍然为 true，也支持旧的 KernelSU（兼容）
+    - name: 集成 KernelSU（兼容旧配置）
+      if: env.ENABLE_KERNELSU == 'true' && env.ENABLE_SUKISU != 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         rm -rf KernelSU
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s ${{ env.KERNELSU_TAG }}
-        # ksu
-        #curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s v0.9.5
-        # sukisu 注意无法编译
-        #curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/refs/heads/main/kernel/setup.sh" | bash -s v3.1
         echo "UPLOADNAME=-KernelSU" >> $GITHUB_ENV
 
     - name: 开启KSU补充内核配置
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         if [ ${{ env.ADD_KPROBES_CONFIG }} = true ]; then
-
             echo "CONFIG_MODULES=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
             echo "CONFIG_KPROBES=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
             echo "CONFIG_HAVE_KPROBES=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
@@ -263,6 +342,11 @@ jobs:
         export KBUILD_BUILD_HOST=Github-Action
         export KBUILD_BUILD_USER=$(echo ${{ github.actor }} | tr A-Z a-z)
         
+        echo "=========================================="
+        echo "🔨 使用配置: ${{ env.KERNEL_CONFIG }}"
+        echo "📂 架构: ${{ env.ARCH }}"
+        echo "=========================================="
+        
         if [ ${{ env.METHOD_OK }} = A ]; then
             make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
             if [ ${{ env.ENABLE_CCACHE }} = true ]; then
@@ -272,7 +356,6 @@ jobs:
             fi
         fi
         
-        
         if [ ${{ env.METHOD_OK }} = B ]; then
             make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} CROSS_COMPILE="aarch64-linux-gnu-" CROSS_COMPILE_ARM32="arm-linux-gnueabi-" ${{ env.KERNEL_CONFIG }}
             if [ ${{ env.ENABLE_CCACHE }} = true ]; then
@@ -281,14 +364,10 @@ jobs:
             make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} ${{ env.CUSTOM_CMDS }} CROSS_COMPILE="aarch64-linux-gnu-" CROSS_COMPILE_ARM32="arm-linux-gnueabi-" ${{ env.EXTRA_CMDS }} ${{ env.EXTRA_CMDT }} ${{ env.EXTRA_CMDU }}
             fi
         fi
-        
-        
-  
-        
+
     - name: 检查编译内核生成文件
       run: |
        cd $GITHUB_WORKSPACE/kernel_workspace
-       # if [ -f android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }} ]; then
        if [ -f android-kernel/out/arch/${{ env.ARCH }}/boot/Image ]; then
            echo "CHECK_FILE_IS_OK=true" >> $GITHUB_ENV
        else
@@ -332,14 +411,14 @@ jobs:
             exit 1
         fi
     
-    - name: 上传Upload Image or Image.gz-dtb
+    - name: 上传 Upload Image or Image.gz-dtb
       if: env.CHECK_FILE_IS_OK == 'true'
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.KERNEL_IMAGE_NAME }}${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
         path: kernel_workspace/android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}
 
-    - name: 上传Upload AnyKernel3
+    - name: 上传 Upload AnyKernel3
       if: env.CHECK_FILE_IS_OK == 'true'
       uses: actions/upload-artifact@v4
       with:
