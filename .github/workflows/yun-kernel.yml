@@ -68,11 +68,6 @@ jobs:
         echo "BUILD_BOOT_IMG=$(cat config.env | grep -w "BUILD_BOOT_IMG" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
         echo "SOURCE_BOOT_IMAGE=$(cat config.env | grep -w "SOURCE_BOOT_IMAGE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
 
-        # ========== SukiSU v4.1.3 配置 ==========
-        echo "ENABLE_SUKISU=$(cat config.env | grep -w "ENABLE_SUKISU" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "SUKISU_VERSION=$(cat config.env | grep -w "SUKISU_VERSION" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "SUKISU_SOURCE=$(cat config.env | grep -w "SUKISU_SOURCE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-
     - name: 大容量空间支持
       uses: easimon/maximize-build-space@master
       with:
@@ -169,9 +164,6 @@ jobs:
         echo ${{ env.KERNEL_SOURCE_BRANCH }}
         git clone ${{ env.KERNEL_SOURCE }} -b ${{ env.KERNEL_SOURCE_BRANCH }} android-kernel --depth=1
 
-    # ============================================================
-    # 自动探测正确的 defconfig
-    # ============================================================
     - name: 自动探测 defconfig
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
@@ -269,42 +261,26 @@ jobs:
         echo "# CONFIG_ANDROID_PARANOID_NETWORK is not set" >> android-kernel/arch/arm64/configs/${{ env.KERNEL_CONFIG }}
 
     # ============================================================
-    # 🚀 集成 SukiSU-Ultra v4.1.3（最新稳定版）
+    # 🚀 集成 KernelSU（完全替换 SukiSU）
     # ============================================================
-    - name: 集成 SukiSU-Ultra v4.1.3
-      if: env.ENABLE_SUKISU == 'true'
+    - name: 集成 KernelSU
+      if: env.ENABLE_KERNELSU == 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         echo "=========================================="
-        echo "🔄 正在集成 SukiSU-Ultra v4.1.3..."
-        echo "📦 源码: ${{ env.SUKISU_SOURCE }}"
-        echo "🏷️  版本: ${{ env.SUKISU_VERSION }}"
+        echo "🔄 正在集成 KernelSU v${{ env.KERNELSU_TAG }}..."
         echo "=========================================="
         
-        # 清理可能存在的旧目录
-        rm -rf KernelSU
-        
-        # 从 SukiSU 官方仓库集成 v4.1.3
-        curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s ${{ env.SUKISU_VERSION }}
-        
-        if [ $? -eq 0 ]; then
-          echo "✅ SukiSU-Ultra v4.1.3 集成成功！"
-          echo "UPLOADNAME=-SukiSU" >> $GITHUB_ENV
-        else
-          echo "❌ SukiSU-Ultra v4.1.3 集成失败！"
-          exit 1
-        fi
-
-    # ============================================================
-    # 如果 SukiSU 未启用，回退到 KernelSU（兼容）
-    # ============================================================
-    - name: 集成 KernelSU（回退方案）
-      if: env.ENABLE_SUKISU != 'true' && env.ENABLE_KERNELSU == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         rm -rf KernelSU
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s ${{ env.KERNELSU_TAG }}
-        echo "UPLOADNAME=-KernelSU" >> $GITHUB_ENV
+        
+        if [ $? -eq 0 ]; then
+          echo "✅ KernelSU 集成成功！"
+          echo "UPLOADNAME=-KernelSU" >> $GITHUB_ENV
+        else
+          echo "❌ KernelSU 集成失败！"
+          exit 1
+        fi
 
     - name: 开启KSU补充内核配置
       run: |
